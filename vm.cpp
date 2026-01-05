@@ -3,174 +3,197 @@
 #include <fstream>
 #include <cstdint>
 
-using namespace std;
+using std::vector;
+using std::uint8_t;
+using std::uint32_t;
+using std::int32_t;
+using std::cerr;
+using std::cout;
+using std::endl;
+
+enum Opcode : uint8_t {
+    PUSH  = 0x01,
+    POP   = 0x02,
+    DUP   = 0x03,
+
+    ADD   = 0x10,
+    SUB   = 0x11,
+    MUL   = 0x12,
+    DIV   = 0x13,
+    CMP   = 0x14,
+
+    JMP   = 0x20,
+    JZ    = 0x21,
+    JNZ   = 0x22,
+
+    STORE = 0x30,
+    LOAD  = 0x31,
+
+    CALL  = 0x40,
+    RET   = 0x41,
+
+    PRINT = 0x50,
+    HALT  = 0xFF
+};
 
 class VM {
+    static constexpr uint32_t MEM_SIZE = 1024;
+
     vector<uint8_t> code;
     vector<int32_t> stack;
     vector<uint32_t> callStack;
-    int32_t memory[1024];
+    int32_t memory[MEM_SIZE]{};
+
     uint32_t pc = 0;
     bool running = true;
 
-    // Helper to safely pop values
-    int32_t pop() {
-        if (stack.empty()) {
-            cerr << "Runtime Error: Stack Underflow at PC " << (pc - 1) << endl;
-            running = false;
-            return 0;
-        }
-        int32_t val = stack.back();
-        stack.pop_back();
-        return val;
+    void error(const char* msg) {
+        cerr << "Runtime Error: " << msg << " at PC " << pc << endl;
+        running = false;
     }
 
-public:
-    VM(vector<uint8_t> b) : code(b) { 
-        for(int i = 0; i < 1024; i++) memory[i] = 0; 
+    int32_t pop() {
+        if (stack.empty()) {
+            error("Stack underflow");
+            return 0;
+        }
+        int32_t v = stack.back();
+        stack.pop_back();
+        return v;
     }
 
     int32_t fetch32() {
         if (pc + 4 > code.size()) {
-            cerr << "Runtime Error: Unexpected End of Bytecode" << endl;
-            running = false;
+            error("Unexpected end of bytecode");
             return 0;
         }
-        uint32_t v = (uint32_t)code[pc] << 24 | (uint32_t)code[pc+1] << 16 | 
-                     (uint32_t)code[pc+2] << 8 | (uint32_t)code[pc+3];
+
+        uint32_t v =
+            (code[pc] << 24) |
+            (code[pc + 1] << 16) |
+            (code[pc + 2] << 8) |
+            (code[pc + 3]);
+
         pc += 4;
-        return (int32_t)v;
+        return static_cast<int32_t>(v);
     }
+
+public:
+    explicit VM(vector<uint8_t> bytecode) : code(std::move(bytecode)) {}
 
     void run() {
         while (running && pc < code.size()) {
-            uint8_t op = code[pc++];
+            Opcode op = static_cast<Opcode>(code[pc++]);
+
             switch (op) {
-                case 0x01: // PUSH
-                    stack.push_back(fetch32()); 
-                    break;
-                
-                case 0x02: // POP
-                    pop(); 
-                    break;
-                
-                case 0x03: // DUP
-                    if(!stack.empty()) stack.push_back(stack.back());
-                    else { cerr << "Error: DUP on empty stack" << endl; running = false; }
+                case PUSH:
+                    stack.push_back(fetch32());
                     break;
 
-                case 0x10: { // ADD
-                    int32_t b = pop(); int32_t a = pop();
-                    stack.push_back(a + b); break; 
-                }
+                case POP:
+                    pop();
+                    break;
 
-                case 0x11: { // SUB
-                    int32_t b = pop(); int32_t a = pop();
-                    stack.push_back(a - b); break; 
-                }
+                case DUP:
+                    if (stack.empty()) error("DUP on empty stack");
+                    else stack.push_back(stack.back());
+                    break;
 
-                case 0x12: { // MUL
-                    int32_t b = pop(); int32_t a = pop();
-                    stack.push_back(a * b); break; 
+                case ADD: stack.push_back(pop() + pop()); break;
+                case SUB: {
+                    int32_t b = pop(), a = pop();
+                    stack.push_back(a - b);
+                    break;
                 }
+                case MUL: stack.push_back(pop() * pop()); break;
 
-                case 0x13: { // DIV
-                    int32_t b = pop(); int32_t a = pop();
-                    if (b == 0) {
-                        cerr << "Runtime Error: Division by Zero" << endl;
-                        running = false;
-                    } else {
-                        stack.push_back(a / b);
-                    }
+                case DIV: {
+                    int32_t b = pop(), a = pop();
+                    if (b == 0) error("Division by zero");
+                    else stack.push_back(a / b);
                     break;
                 }
 
-                case 0x14: { // CMP (Compare)
-    int32_t b = pop(); // Top value
-    int32_t a = pop(); // Second value
-    if (a < b) stack.push_back(-1);
-    else if (a > b) stack.push_back(1);
-    else stack.push_back(0);
-    break;
-}
+                case CMP: {
+                    int32_t b = pop(), a = pop();
+                    stack.push_back((a > b) - (a < b));
+                    break;
+                }
 
-case 0x20: { // JMP (Unconditional Jump)
-    uint32_t dest = fetch32();
-    pc = dest;
-    break;
-}
+                case JMP:
+                    pc = fetch32();
+                    break;
 
-case 0x22: { // JNZ (Jump if Not Zero)
-    uint32_t dest = fetch32();
-    if (pop() != 0) pc = dest;
-    break;
-}
-
-
-
-                case 0x21: { // JZ (Jump if Zero)
+                case JZ: {
                     uint32_t dest = fetch32();
                     if (pop() == 0) pc = dest;
                     break;
                 }
 
-                case 0x30: { // STORE
-                    uint32_t addr = (uint32_t)fetch32();
-                    int32_t val = pop();
-                    if (addr < 1024) memory[addr] = val;
-                    else { cerr << "Error: Memory Out of Bounds (Store)" << endl; running = false; }
-                    break;
-                }
-
-                case 0x31: { // LOAD
-                    uint32_t addr = (uint32_t)fetch32();
-                    if (addr < 1024) stack.push_back(memory[addr]);
-                    else { cerr << "Error: Memory Out of Bounds (Load)" << endl; running = false; }
-                    break;
-                }
-
-                case 0x40: { // CALL
+                case JNZ: {
                     uint32_t dest = fetch32();
-                    callStack.push_back(pc);
-                    pc = dest;
+                    if (pop() != 0) pc = dest;
                     break;
                 }
 
-                case 0x41: { // RET
-                    if (!callStack.empty()) {
+                case STORE: {
+                    uint32_t addr = fetch32();
+                    if (addr >= MEM_SIZE) error("Memory store OOB");
+                    else memory[addr] = pop();
+                    break;
+                }
+
+                case LOAD: {
+                    uint32_t addr = fetch32();
+                    if (addr >= MEM_SIZE) error("Memory load OOB");
+                    else stack.push_back(memory[addr]);
+                    break;
+                }
+
+                case CALL:
+                    callStack.push_back(pc);
+                    pc = fetch32();
+                    break;
+
+                case RET:
+                    if (callStack.empty()) error("RET without CALL");
+                    else {
                         pc = callStack.back();
                         callStack.pop_back();
-                    } else {
-                        cerr << "Error: RET without CALL" << endl;
-                        running = false;
                     }
                     break;
-                }
 
-                case 0x50: // PRINT
+                case PRINT:
                     cout << "VM PRINT: " << pop() << endl;
                     break;
 
-                case 0xFF: // HALT
+                case HALT:
                     running = false;
                     break;
 
                 default:
-                    cerr << "Unknown Opcode: " << hex << (int)op << endl;
-                    running = false;
+                    error("Unknown opcode");
                     break;
             }
         }
-        if (!stack.empty()) cout << "Final Result: " << stack.back() << endl;
+
+        if (!stack.empty())
+            cout << "Final Result: " << stack.back() << endl;
     }
 };
 
 int main(int argc, char** argv) {
     if (argc < 2) return 1;
-    ifstream f(argv[1], ios::binary);
+
+    std::ifstream f(argv[1], std::ios::binary);
     if (!f) return 1;
-    vector<uint8_t> b((istreambuf_iterator<char>(f)), istreambuf_iterator<char>());
-    VM vm(b);
+
+    vector<uint8_t> bytecode(
+        (std::istreambuf_iterator<char>(f)),
+        std::istreambuf_iterator<char>()
+    );
+
+    VM vm(bytecode);
     vm.run();
     return 0;
 }
